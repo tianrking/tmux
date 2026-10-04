@@ -1,0 +1,90 @@
+name: tmux original OSC52 probe
+on:
+  push:
+    branches: [codex/validate-osc52-original]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  original:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            make: make
+          - runner: ubuntu-24.04-arm
+            make: make
+          - runner: macos-26
+            make: gmake
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: original immutable source
+        shell: bash
+        run: |
+          git worktree add --detach ../original 8f25579c5aef8d93924a20681f394e2a582fd3ad
+          cp .github/osc52-original-probe.sh ../osc52-original-probe.sh
+          cd ../original
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD
+          git ls-files -z | xargs -0 shasum -a 256 >../original-before.sha256
+          shasum -a 256 ../osc52-original-probe.sh
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake bison build-essential libevent-dev libncurses-dev libutf8proc-dev pkg-config
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install autoconf automake bison libevent jemalloc make ncurses utf8proc pkg-config
+      - name: original native build
+        working-directory: ../original
+        run: |
+          uname -a
+          cc --version
+          python3 --version
+          sh autogen.sh
+          ./configure --enable-utf8proc --enable-asan
+          ${{ matrix.make }} -j"$(getconf _NPROCESSORS_ONLN)"
+          ./tmux -V
+          shasum -a 256 ./tmux
+      - name: actual original PTY probe
+        id: probe
+        continue-on-error: true
+        working-directory: ../original
+        run: sh ../osc52-original-probe.sh ./tmux
+      - name: original full regress
+        id: regress
+        continue-on-error: true
+        working-directory: ../original/regress
+        run: ${{ matrix.make }} -j"$(getconf _NPROCESSORS_ONLN)"
+      - name: original immutable source after
+        if: always()
+        shell: bash
+        working-directory: ../original
+        run: |
+          git rev-parse HEAD
+          git ls-files -z | xargs -0 shasum -a 256 >../original-after.sha256
+          cmp ../original-before.sha256 ../original-after.sha256
+          git status --porcelain --untracked-files=no
+          test -z "$(git status --porcelain --untracked-files=no)"
+          shasum -a 256 ../osc52-original-probe.sh
+          echo "probe=${{ steps.probe.outcome }} regress=${{ steps.regress.outcome }}"
+      - name: logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: original-${{ matrix.runner }}
+          path: |
+            ../original/regress/logs/*.log
+            ../original-before.sha256
+            ../original-after.sha256
+          if-no-files-found: ignore
+      - name: native result
+        if: always()
+        run: test '${{ steps.probe.outcome }}' = success && test '${{ steps.regress.outcome }}' = success
