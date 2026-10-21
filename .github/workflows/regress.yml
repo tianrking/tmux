@@ -2,9 +2,6 @@ name: 'Run Tests'
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '33 3 * * *'
-
 permissions:
   contents: read
 
